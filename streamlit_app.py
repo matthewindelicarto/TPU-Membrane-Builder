@@ -11,7 +11,6 @@ from tpu_builder import (
 # Page config
 st.set_page_config(
     page_title="TPU Membrane Builder",
-    page_icon="🧪",
     layout="wide"
 )
 
@@ -24,57 +23,124 @@ if 'perm_result' not in st.session_state:
     st.session_state.perm_result = None
 
 
-def generate_3d_structure(membrane, carbosil_frac):
-    """Generate 3D atom positions for the membrane visualization"""
+def generate_pdb_from_structure(membrane, carbosil_frac):
+    """Generate PDB-like atom data for all-atom visualization"""
     structure = membrane.get_structure()
     atoms = []
 
-    # Sample the structure to create atoms
     nx, ny, nz = structure.shape
+    scale = 1.5  # Angstrom-like scaling
 
-    # Scale factors for visualization
-    scale = 2.0
+    # Generate atoms representing the polymer structure
+    atom_id = 1
+    res_id = 1
 
-    # Sample every few points to avoid too many atoms
-    step = 2
+    # Sample with finer resolution for all-atom look
+    step = 1
 
     for i in range(0, nx, step):
         for j in range(0, ny, step):
             for k in range(0, nz, step):
                 val = structure[i, j, k]
-                if val > 0.1:  # Only show significant density
+                if val > 0.05:  # Include more atoms
                     x = (i - nx/2) * scale
                     y = (j - ny/2) * scale
                     z = (k - nz/2) * scale
 
-                    # Determine segment type based on value
-                    if val > 0.5:
-                        segment = "hard"
+                    # Assign atom types based on segment type and position
+                    if val > 0.6:
+                        # Hard segment - urethane linkages
+                        if (i + j + k) % 3 == 0:
+                            atom_type = "N"  # Nitrogen in urethane
+                            element = "N"
+                        elif (i + j + k) % 3 == 1:
+                            atom_type = "C"  # Carbon
+                            element = "C"
+                        else:
+                            atom_type = "O"  # Oxygen in urethane
+                            element = "O"
+                        res_name = "URE"  # Urethane
+                    elif val > 0.3:
+                        # Soft segment
+                        if carbosil_frac > 0.5:
+                            # PDMS (silicone) - Si, O, C
+                            if (i + j) % 3 == 0:
+                                atom_type = "SI"
+                                element = "SI"
+                            elif (i + j) % 3 == 1:
+                                atom_type = "O"
+                                element = "O"
+                            else:
+                                atom_type = "C"
+                                element = "C"
+                            res_name = "PDM"  # PDMS
+                        else:
+                            # Polyether (PEG-like) - C, O
+                            if (i + j) % 2 == 0:
+                                atom_type = "C"
+                                element = "C"
+                            else:
+                                atom_type = "O"
+                                element = "O"
+                            res_name = "PEG"  # Polyether
                     else:
-                        segment = "soft"
+                        # Interface/amorphous region
+                        atom_type = "C"
+                        element = "C"
+                        res_name = "AMO"
 
                     atoms.append({
+                        'id': atom_id,
+                        'name': atom_type,
+                        'res_name': res_name,
+                        'res_id': res_id,
                         'x': x,
                         'y': y,
                         'z': z,
-                        'segment': segment,
+                        'element': element,
                         'val': val
                     })
+                    atom_id += 1
+
+                    if atom_id % 50 == 0:
+                        res_id += 1
 
     return atoms
 
 
-def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
-    """Render 3D structure using 3Dmol.js"""
+def render_3dmol_allatom(atoms, carbosil_frac, molecule_info=None, animate=False):
+    """Render all-atom style structure using 3Dmol.js"""
 
-    # Colors for segments
-    # CarboSil: blue tones, Sparsa: red tones
-    hard_r = int(52 * carbosil_frac + 231 * (1-carbosil_frac))
-    hard_g = int(152 * carbosil_frac + 76 * (1-carbosil_frac))
-    hard_b = int(219 * carbosil_frac + 60 * (1-carbosil_frac))
-    hard_color = f"0x{hard_r:02x}{hard_g:02x}{hard_b:02x}"
+    # Build PDB string
+    pdb_lines = []
+    for atom in atoms:
+        # PDB format
+        line = f"ATOM  {atom['id']:5d} {atom['name']:4s} {atom['res_name']:3s}  {atom['res_id']:4d}    {atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}  1.00  0.00          {atom['element']:>2s}"
+        pdb_lines.append(line)
+    pdb_lines.append("END")
+    pdb_data = "\n".join(pdb_lines)
 
-    soft_color = "0x5d6d7e"  # Gray for soft segments
+    # Escape for JavaScript
+    pdb_escaped = pdb_data.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
+
+    # Color scheme based on composition
+    # CarboSil: blue tones, Sparsa: warmer tones
+    if carbosil_frac > 0.5:
+        # More CarboSil - blue/cyan scheme
+        color_scheme = """
+        viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0x3498db'}, sphere: {scale: 0.2, color: '0x3498db'}});
+        viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x1abc9c'}, sphere: {scale: 0.18, color: '0x1abc9c'}});
+        viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0x2ecc71'}, sphere: {scale: 0.18, color: '0x2ecc71'}});
+        viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
+        """
+    else:
+        # More Sparsa - orange/red scheme
+        color_scheme = """
+        viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0xe74c3c'}, sphere: {scale: 0.2, color: '0xe74c3c'}});
+        viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x9b59b6'}, sphere: {scale: 0.18, color: '0x9b59b6'}});
+        viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0xf39c12'}, sphere: {scale: 0.18, color: '0xf39c12'}});
+        viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
+        """
 
     # Molecule colors
     mol_colors = {
@@ -84,22 +150,6 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
         "oxygen": "0x3498db"
     }
 
-    # Build sphere additions JavaScript
-    spheres_js = ""
-    for atom in atoms:
-        color = hard_color if atom['segment'] == 'hard' else soft_color
-        radius = 1.5 if atom['segment'] == 'hard' else 1.2
-        opacity = 0.85 if atom['segment'] == 'hard' else 0.6
-        spheres_js += f"""
-        viewer.addSphere({{
-            center: {{x: {atom['x']:.1f}, y: {atom['y']:.1f}, z: {atom['z']:.1f}}},
-            radius: {radius},
-            color: {color},
-            opacity: {opacity}
-        }});
-        """
-
-    # Molecule visualization
     mol_sphere_js = ""
     animation_js = ""
 
@@ -109,8 +159,8 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
         if animate:
             animation_js = f"""
             var sphereId = null;
-            var startZ = 30;
-            var endZ = -30;
+            var startZ = 25;
+            var endZ = -25;
             var duration = 4000;
             var startTime = Date.now();
             var color = {color};
@@ -120,11 +170,10 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
                 var progress = elapsed / duration;
 
                 if (progress >= 1) {{
-                    // Reset to center
                     if (sphereId !== null) viewer.removeShape(sphereId);
                     sphereId = viewer.addSphere({{
                         center: {{x: 0, y: 0, z: 0}},
-                        radius: 4,
+                        radius: 2.5,
                         color: color,
                         opacity: 0.95
                     }});
@@ -132,7 +181,6 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
                     return;
                 }}
 
-                // Calculate z position with slowdown in membrane
                 var z;
                 if (progress < 0.3) {{
                     z = startZ - startZ * (progress / 0.3);
@@ -147,7 +195,7 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
                 if (sphereId !== null) viewer.removeShape(sphereId);
                 sphereId = viewer.addSphere({{
                     center: {{x: 0, y: 0, z: z}},
-                    radius: 4,
+                    radius: 2.5,
                     color: color,
                     opacity: 0.95
                 }});
@@ -161,7 +209,7 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
             mol_sphere_js = f"""
             viewer.addSphere({{
                 center: {{x: 0, y: 0, z: 0}},
-                radius: 4,
+                radius: 2.5,
                 color: {color},
                 opacity: 0.95
             }});
@@ -172,15 +220,15 @@ def render_3dmol(atoms, carbosil_frac, molecule_info=None, animate=False):
     <div id="viewer" style="width: 100%; height: 500px; position: relative;"></div>
     <script>
         var viewer = $3Dmol.createViewer("viewer", {{backgroundColor: "0x1a1a1a"}});
+        var pdb = `{pdb_escaped}`;
+        viewer.addModel(pdb, "pdb");
 
-        // Add membrane spheres
-        {spheres_js}
+        {color_scheme}
 
-        // Add molecule
         {mol_sphere_js}
 
         viewer.zoomTo();
-        viewer.rotate(20, {{x: 1, y: 0, z: 0}});
+        viewer.rotate(15, {{x: 1, y: 0, z: 0}});
         viewer.render();
 
         {animation_js}
@@ -304,8 +352,10 @@ with col2:
         membrane = st.session_state.membrane
         props = membrane.properties
 
-        # Animate button
+        # Style selector and animate button
         c1, c2 = st.columns([3, 1])
+        with c1:
+            style = st.radio("Style", ["stick", "sphere", "line"], horizontal=True)
         with c2:
             animate = False
             if st.session_state.perm_result:
@@ -318,16 +368,17 @@ with col2:
                 'name': st.session_state.perm_result['mol_name']
             }
 
-        # Generate 3D structure
-        atoms = generate_3d_structure(
+        # Generate all-atom structure
+        atoms = generate_pdb_from_structure(
             membrane,
             membrane.composition.get("CarboSil", 0.5)
         )
 
-        # Render 3D viewer
-        render_3dmol(
+        # Render 3D viewer with style support
+        render_3dmol_allatom_styled(
             atoms,
             membrane.composition.get("CarboSil", 0.5),
+            style,
             mol_info,
             animate
         )
@@ -358,3 +409,158 @@ with col2:
 
     else:
         st.info("Build a membrane to see the 3D structure")
+
+
+def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None, animate=False):
+    """Render all-atom style structure with style options"""
+
+    # Build PDB string
+    pdb_lines = []
+    for atom in atoms:
+        line = f"ATOM  {atom['id']:5d} {atom['name']:4s} {atom['res_name']:3s}  {atom['res_id']:4d}    {atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}  1.00  0.00          {atom['element']:>2s}"
+        pdb_lines.append(line)
+    pdb_lines.append("END")
+    pdb_data = "\n".join(pdb_lines)
+
+    pdb_escaped = pdb_data.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
+
+    # Style-based rendering
+    if style == "stick":
+        if carbosil_frac > 0.5:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0x3498db'}, sphere: {scale: 0.2, color: '0x3498db'}});
+            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x1abc9c'}, sphere: {scale: 0.18, color: '0x1abc9c'}});
+            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0x2ecc71'}, sphere: {scale: 0.18, color: '0x2ecc71'}});
+            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
+            """
+        else:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0xe74c3c'}, sphere: {scale: 0.2, color: '0xe74c3c'}});
+            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x9b59b6'}, sphere: {scale: 0.18, color: '0x9b59b6'}});
+            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0xf39c12'}, sphere: {scale: 0.18, color: '0xf39c12'}});
+            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
+            """
+    elif style == "sphere":
+        if carbosil_frac > 0.5:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0x3498db'}});
+            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x1abc9c'}});
+            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0x2ecc71'}});
+            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
+            """
+        else:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0xe74c3c'}});
+            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x9b59b6'}});
+            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0xf39c12'}});
+            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
+            """
+    else:  # line
+        if carbosil_frac > 0.5:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0x3498db'}});
+            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x1abc9c'}});
+            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0x2ecc71'}});
+            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
+            """
+        else:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0xe74c3c'}});
+            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x9b59b6'}});
+            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0xf39c12'}});
+            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
+            """
+
+    # Molecule colors
+    mol_colors = {
+        "phenol": "0xe74c3c",
+        "m-cresol": "0x9b59b6",
+        "glucose": "0xf39c12",
+        "oxygen": "0x3498db"
+    }
+
+    mol_sphere_js = ""
+    animation_js = ""
+
+    if molecule_info:
+        color = mol_colors.get(molecule_info['name'], "0x1abc9c")
+
+        if animate:
+            animation_js = f"""
+            var sphereId = null;
+            var startZ = 25;
+            var endZ = -25;
+            var duration = 4000;
+            var startTime = Date.now();
+            var color = {color};
+
+            function animatePermeation() {{
+                var elapsed = Date.now() - startTime;
+                var progress = elapsed / duration;
+
+                if (progress >= 1) {{
+                    if (sphereId !== null) viewer.removeShape(sphereId);
+                    sphereId = viewer.addSphere({{
+                        center: {{x: 0, y: 0, z: 0}},
+                        radius: 2.5,
+                        color: color,
+                        opacity: 0.95
+                    }});
+                    viewer.render();
+                    return;
+                }}
+
+                var z;
+                if (progress < 0.3) {{
+                    z = startZ - startZ * (progress / 0.3);
+                }} else if (progress < 0.7) {{
+                    var membraneProgress = (progress - 0.3) / 0.4;
+                    z = 0 - (endZ * 0.5) * membraneProgress;
+                }} else {{
+                    var exitProgress = (progress - 0.7) / 0.3;
+                    z = endZ * 0.5 - (endZ * 0.5) * exitProgress;
+                }}
+
+                if (sphereId !== null) viewer.removeShape(sphereId);
+                sphereId = viewer.addSphere({{
+                    center: {{x: 0, y: 0, z: z}},
+                    radius: 2.5,
+                    color: color,
+                    opacity: 0.95
+                }});
+                viewer.render();
+                requestAnimationFrame(animatePermeation);
+            }}
+
+            animatePermeation();
+            """
+        else:
+            mol_sphere_js = f"""
+            viewer.addSphere({{
+                center: {{x: 0, y: 0, z: 0}},
+                radius: 2.5,
+                color: {color},
+                opacity: 0.95
+            }});
+            """
+
+    html = f"""
+    <script src="https://3dmol.org/build/3Dmol-min.js"></script>
+    <div id="viewer" style="width: 100%; height: 500px; position: relative;"></div>
+    <script>
+        var viewer = $3Dmol.createViewer("viewer", {{backgroundColor: "0x1a1a1a"}});
+        var pdb = `{pdb_escaped}`;
+        viewer.addModel(pdb, "pdb");
+
+        {color_scheme}
+
+        {mol_sphere_js}
+
+        viewer.zoomTo();
+        viewer.rotate(15, {{x: 1, y: 0, z: 0}});
+        viewer.render();
+
+        {animation_js}
+    </script>
+    """
+    components.html(html, height=520)
