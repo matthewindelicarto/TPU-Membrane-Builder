@@ -1,0 +1,13 @@
+# TPU Membrane Builder Configuration
+# ===================================
+
+# Membrane dimensions
+thickness = 100.0  # micrometers
+width = 10.0       # mm
+height = 10.0      # mm
+
+# Polymer composition (fractions, will be normalized to sum to 1)
+# Available polymers: CarboSil, Sparsa
+
+CarboSil = 0.7
+Sparsa = 0.3
