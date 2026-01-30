@@ -2,6 +2,8 @@
 
 Build thermoplastic polyurethane (TPU) membranes from CarboSil and Sparsa polymers and predict molecular permeability.
 
+**Live Demo**: https://tpu-membrane-builder.streamlit.app/
+
 ## Polymers
 
 ### CarboSil
