@@ -237,6 +237,161 @@ def render_3dmol_allatom(atoms, carbosil_frac, molecule_info=None, animate=False
     components.html(html, height=520)
 
 
+def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None, animate=False):
+    """Render all-atom style structure with style options"""
+
+    # Build PDB string
+    pdb_lines = []
+    for atom in atoms:
+        line = f"ATOM  {atom['id']:5d} {atom['name']:4s} {atom['res_name']:3s}  {atom['res_id']:4d}    {atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}  1.00  0.00          {atom['element']:>2s}"
+        pdb_lines.append(line)
+    pdb_lines.append("END")
+    pdb_data = "\n".join(pdb_lines)
+
+    pdb_escaped = pdb_data.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
+
+    # Style-based rendering
+    if style == "stick":
+        if carbosil_frac > 0.5:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0x3498db'}, sphere: {scale: 0.2, color: '0x3498db'}});
+            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x1abc9c'}, sphere: {scale: 0.18, color: '0x1abc9c'}});
+            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0x2ecc71'}, sphere: {scale: 0.18, color: '0x2ecc71'}});
+            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
+            """
+        else:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0xe74c3c'}, sphere: {scale: 0.2, color: '0xe74c3c'}});
+            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x9b59b6'}, sphere: {scale: 0.18, color: '0x9b59b6'}});
+            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0xf39c12'}, sphere: {scale: 0.18, color: '0xf39c12'}});
+            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
+            """
+    elif style == "sphere":
+        if carbosil_frac > 0.5:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0x3498db'}});
+            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x1abc9c'}});
+            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0x2ecc71'}});
+            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
+            """
+        else:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0xe74c3c'}});
+            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x9b59b6'}});
+            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0xf39c12'}});
+            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
+            """
+    else:  # line
+        if carbosil_frac > 0.5:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0x3498db'}});
+            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x1abc9c'}});
+            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0x2ecc71'}});
+            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
+            """
+        else:
+            color_scheme = """
+            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0xe74c3c'}});
+            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x9b59b6'}});
+            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0xf39c12'}});
+            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
+            """
+
+    # Molecule colors
+    mol_colors = {
+        "phenol": "0xe74c3c",
+        "m-cresol": "0x9b59b6",
+        "glucose": "0xf39c12",
+        "oxygen": "0x3498db"
+    }
+
+    mol_sphere_js = ""
+    animation_js = ""
+
+    if molecule_info:
+        color = mol_colors.get(molecule_info['name'], "0x1abc9c")
+
+        if animate:
+            animation_js = f"""
+            var sphereId = null;
+            var startZ = 25;
+            var endZ = -25;
+            var duration = 4000;
+            var startTime = Date.now();
+            var color = {color};
+
+            function animatePermeation() {{
+                var elapsed = Date.now() - startTime;
+                var progress = elapsed / duration;
+
+                if (progress >= 1) {{
+                    if (sphereId !== null) viewer.removeShape(sphereId);
+                    sphereId = viewer.addSphere({{
+                        center: {{x: 0, y: 0, z: 0}},
+                        radius: 2.5,
+                        color: color,
+                        opacity: 0.95
+                    }});
+                    viewer.render();
+                    return;
+                }}
+
+                var z;
+                if (progress < 0.3) {{
+                    z = startZ - startZ * (progress / 0.3);
+                }} else if (progress < 0.7) {{
+                    var membraneProgress = (progress - 0.3) / 0.4;
+                    z = 0 - (endZ * 0.5) * membraneProgress;
+                }} else {{
+                    var exitProgress = (progress - 0.7) / 0.3;
+                    z = endZ * 0.5 - (endZ * 0.5) * exitProgress;
+                }}
+
+                if (sphereId !== null) viewer.removeShape(sphereId);
+                sphereId = viewer.addSphere({{
+                    center: {{x: 0, y: 0, z: z}},
+                    radius: 2.5,
+                    color: color,
+                    opacity: 0.95
+                }});
+                viewer.render();
+                requestAnimationFrame(animatePermeation);
+            }}
+
+            animatePermeation();
+            """
+        else:
+            mol_sphere_js = f"""
+            viewer.addSphere({{
+                center: {{x: 0, y: 0, z: 0}},
+                radius: 2.5,
+                color: {color},
+                opacity: 0.95
+            }});
+            """
+
+    html = f"""
+    <script src="https://3dmol.org/build/3Dmol-min.js"></script>
+    <div id="viewer" style="width: 100%; height: 500px; position: relative;"></div>
+    <script>
+        var viewer = $3Dmol.createViewer("viewer", {{backgroundColor: "0x1a1a1a"}});
+        var pdb = `{pdb_escaped}`;
+        viewer.addModel(pdb, "pdb");
+
+        {color_scheme}
+
+        {mol_sphere_js}
+
+        viewer.zoomTo();
+        viewer.rotate(15, {{x: 1, y: 0, z: 0}});
+        viewer.render();
+
+        {animation_js}
+    </script>
+    """
+    components.html(html, height=520)
+
+
 # Layout
 col1, col2 = st.columns([1, 2])
 
@@ -409,158 +564,3 @@ with col2:
 
     else:
         st.info("Build a membrane to see the 3D structure")
-
-
-def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None, animate=False):
-    """Render all-atom style structure with style options"""
-
-    # Build PDB string
-    pdb_lines = []
-    for atom in atoms:
-        line = f"ATOM  {atom['id']:5d} {atom['name']:4s} {atom['res_name']:3s}  {atom['res_id']:4d}    {atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}  1.00  0.00          {atom['element']:>2s}"
-        pdb_lines.append(line)
-    pdb_lines.append("END")
-    pdb_data = "\n".join(pdb_lines)
-
-    pdb_escaped = pdb_data.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
-
-    # Style-based rendering
-    if style == "stick":
-        if carbosil_frac > 0.5:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0x3498db'}, sphere: {scale: 0.2, color: '0x3498db'}});
-            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x1abc9c'}, sphere: {scale: 0.18, color: '0x1abc9c'}});
-            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0x2ecc71'}, sphere: {scale: 0.18, color: '0x2ecc71'}});
-            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
-            """
-        else:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0xe74c3c'}, sphere: {scale: 0.2, color: '0xe74c3c'}});
-            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x9b59b6'}, sphere: {scale: 0.18, color: '0x9b59b6'}});
-            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0xf39c12'}, sphere: {scale: 0.18, color: '0xf39c12'}});
-            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
-            """
-    elif style == "sphere":
-        if carbosil_frac > 0.5:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0x3498db'}});
-            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x1abc9c'}});
-            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0x2ecc71'}});
-            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
-            """
-        else:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0xe74c3c'}});
-            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x9b59b6'}});
-            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0xf39c12'}});
-            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
-            """
-    else:  # line
-        if carbosil_frac > 0.5:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0x3498db'}});
-            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x1abc9c'}});
-            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0x2ecc71'}});
-            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
-            """
-        else:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0xe74c3c'}});
-            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x9b59b6'}});
-            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0xf39c12'}});
-            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
-            """
-
-    # Molecule colors
-    mol_colors = {
-        "phenol": "0xe74c3c",
-        "m-cresol": "0x9b59b6",
-        "glucose": "0xf39c12",
-        "oxygen": "0x3498db"
-    }
-
-    mol_sphere_js = ""
-    animation_js = ""
-
-    if molecule_info:
-        color = mol_colors.get(molecule_info['name'], "0x1abc9c")
-
-        if animate:
-            animation_js = f"""
-            var sphereId = null;
-            var startZ = 25;
-            var endZ = -25;
-            var duration = 4000;
-            var startTime = Date.now();
-            var color = {color};
-
-            function animatePermeation() {{
-                var elapsed = Date.now() - startTime;
-                var progress = elapsed / duration;
-
-                if (progress >= 1) {{
-                    if (sphereId !== null) viewer.removeShape(sphereId);
-                    sphereId = viewer.addSphere({{
-                        center: {{x: 0, y: 0, z: 0}},
-                        radius: 2.5,
-                        color: color,
-                        opacity: 0.95
-                    }});
-                    viewer.render();
-                    return;
-                }}
-
-                var z;
-                if (progress < 0.3) {{
-                    z = startZ - startZ * (progress / 0.3);
-                }} else if (progress < 0.7) {{
-                    var membraneProgress = (progress - 0.3) / 0.4;
-                    z = 0 - (endZ * 0.5) * membraneProgress;
-                }} else {{
-                    var exitProgress = (progress - 0.7) / 0.3;
-                    z = endZ * 0.5 - (endZ * 0.5) * exitProgress;
-                }}
-
-                if (sphereId !== null) viewer.removeShape(sphereId);
-                sphereId = viewer.addSphere({{
-                    center: {{x: 0, y: 0, z: z}},
-                    radius: 2.5,
-                    color: color,
-                    opacity: 0.95
-                }});
-                viewer.render();
-                requestAnimationFrame(animatePermeation);
-            }}
-
-            animatePermeation();
-            """
-        else:
-            mol_sphere_js = f"""
-            viewer.addSphere({{
-                center: {{x: 0, y: 0, z: 0}},
-                radius: 2.5,
-                color: {color},
-                opacity: 0.95
-            }});
-            """
-
-    html = f"""
-    <script src="https://3dmol.org/build/3Dmol-min.js"></script>
-    <div id="viewer" style="width: 100%; height: 500px; position: relative;"></div>
-    <script>
-        var viewer = $3Dmol.createViewer("viewer", {{backgroundColor: "0x1a1a1a"}});
-        var pdb = `{pdb_escaped}`;
-        viewer.addModel(pdb, "pdb");
-
-        {color_scheme}
-
-        {mol_sphere_js}
-
-        viewer.zoomTo();
-        viewer.rotate(15, {{x: 1, y: 0, z: 0}});
-        viewer.render();
-
-        {animation_js}
-    </script>
-    """
-    components.html(html, height=520)
