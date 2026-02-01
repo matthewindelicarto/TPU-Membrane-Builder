@@ -23,33 +23,32 @@ if 'perm_result' not in st.session_state:
     st.session_state.perm_result = None
 
 
-def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=12):
+def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25):
     """
-    Generate realistic all-atom polymer chain structures.
+    Generate realistic random-coil polymer membrane structure.
 
-    CarboSil structure: -[Si(CH3)2-O]n- (PDMS soft) + -O-CO-O- (polycarbonate) + -NH-CO-O- (urethane hard)
-    Sparsa structure: -[CH2-CH2-O]n- (PEG soft) + -NH-CO-O- (urethane hard)
+    Based on actual polymer chemistry:
+    - Sparsa-1: PEG/PPG polyether (70-85%) + H12MDI urethane (15-30%)
+    - Sparsa-2: Polyester/PCL soft + H12MDI urethane (tighter packing)
+    - CarboSil-1: PDMS (50-75%) + polycarbonate-urethane (25-50%)
+    - CarboSil-2: PDMS + higher hard segment (stiffer)
+
+    Creates tangled random-coil chains filling a membrane volume.
     """
     atoms = []
     atom_id = 1
     res_id = 1
 
-    # Membrane dimensions for positioning chains
-    thickness = membrane.properties.thickness_um * 0.01  # Scale to visualization units
+    np.random.seed(42)
 
-    # Bond lengths in Angstroms
-    C_C = 1.54
-    C_O = 1.43
-    C_N = 1.47
-    Si_O = 1.64
-    Si_C = 1.87
-    C_double_O = 1.23
+    # Membrane box (Angstroms)
+    box_size = 35
 
-    def add_atom(name, element, x, y, z, res_name):
+    def add_atom(element, x, y, z, res_name):
         nonlocal atom_id, res_id
         atoms.append({
             'id': atom_id,
-            'name': name,
+            'name': element,
             'res_name': res_name,
             'res_id': res_id,
             'x': x, 'y': y, 'z': z,
@@ -57,135 +56,167 @@ def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=12)
         })
         atom_id += 1
 
-    def generate_pdms_unit(start_x, start_y, start_z, direction):
-        """Generate -[Si(CH3)2-O]- PDMS repeat unit"""
-        nonlocal res_id
-        x, y, z = start_x, start_y, start_z
+    def random_direction():
+        """Generate random unit vector for chain growth"""
+        theta = np.random.uniform(0, 2 * np.pi)
+        phi = np.random.uniform(0.4, np.pi - 0.4)
+        return (
+            np.sin(phi) * np.cos(theta),
+            np.sin(phi) * np.sin(theta),
+            np.cos(phi)
+        )
+
+    def step(x, y, z, bond_len, direction, wobble=0.3):
+        """Take a step along chain with some randomness"""
         dx, dy, dz = direction
+        # Add wobble
+        dx += np.random.uniform(-wobble, wobble)
+        dy += np.random.uniform(-wobble, wobble)
+        dz += np.random.uniform(-wobble, wobble)
+        # Normalize and scale
+        mag = np.sqrt(dx*dx + dy*dy + dz*dz)
+        if mag > 0:
+            dx, dy, dz = dx/mag * bond_len, dy/mag * bond_len, dz/mag * bond_len
+        return x + dx, y + dy, z + dz, (dx/bond_len, dy/bond_len, dz/bond_len)
 
-        # Si atom
-        add_atom("SI", "SI", x, y, z, "PDM")
-        # Methyl carbons on Si
-        add_atom("C", "C", x + 1.2, y + 1.0, z, "PDM")
-        add_atom("C", "C", x + 1.2, y - 1.0, z, "PDM")
-        # O bridging
-        x += dx * Si_O
-        y += dy * Si_O * 0.5
-        z += dz * Si_O * 0.3
-        add_atom("O", "O", x, y, z, "PDM")
-        res_id += 1
-        return x, y, z
-
-    def generate_peg_unit(start_x, start_y, start_z, direction):
-        """Generate -[CH2-CH2-O]- PEG repeat unit"""
+    def generate_peg_segment(x, y, z, direction, n_units=6):
+        """PEG/PPG: -[CH2-CH2-O]n- polyether soft segment"""
         nonlocal res_id
-        x, y, z = start_x, start_y, start_z
-        dx, dy, dz = direction
+        for _ in range(n_units):
+            x, y, z, direction = step(x, y, z, 1.54, direction)
+            add_atom("C", x, y, z, "PEG")
+            x, y, z, direction = step(x, y, z, 1.54, direction)
+            add_atom("C", x, y, z, "PEG")
+            x, y, z, direction = step(x, y, z, 1.43, direction)
+            add_atom("O", x, y, z, "PEG")
+            res_id += 1
+        return x, y, z, direction
 
-        # CH2
-        add_atom("C", "C", x, y, z, "PEG")
-        x += dx * C_C
-        y += dy * C_C * 0.3
-        # CH2
-        add_atom("C", "C", x, y, z, "PEG")
-        x += dx * C_O
-        y += dy * C_O * 0.2
-        z += dz * C_O * 0.4
-        # O ether
-        add_atom("O", "O", x, y, z, "PEG")
-        res_id += 1
-        return x, y, z
-
-    def generate_urethane_unit(start_x, start_y, start_z, direction):
-        """Generate -NH-CO-O- urethane linkage"""
+    def generate_pcl_segment(x, y, z, direction, n_units=4):
+        """PCL/Polyester: -[O-CO-(CH2)5]n- soft segment"""
         nonlocal res_id
-        x, y, z = start_x, start_y, start_z
-        dx, dy, dz = direction
+        for _ in range(n_units):
+            x, y, z, direction = step(x, y, z, 1.43, direction)
+            add_atom("O", x, y, z, "PCL")
+            x, y, z, direction = step(x, y, z, 1.33, direction)
+            add_atom("C", x, y, z, "PCL")
+            # Carbonyl O to side
+            add_atom("O", x + np.random.uniform(-0.8, 0.8), y + 1.2, z, "PCL")
+            for _ in range(3):
+                x, y, z, direction = step(x, y, z, 1.54, direction)
+                add_atom("C", x, y, z, "PCL")
+            res_id += 1
+        return x, y, z, direction
 
-        # N (from amine)
-        add_atom("N", "N", x, y, z, "URE")
-        x += dx * C_N
-        # C (carbonyl)
-        add_atom("C", "C", x, y, z, "URE")
-        # O (carbonyl double bond)
-        add_atom("O", "O", x, y + 1.2, z, "URE")
-        x += dx * C_O
-        y += dy * C_O * 0.3
-        # O (ester)
-        add_atom("O", "O", x, y, z, "URE")
-        res_id += 1
-        return x, y, z
-
-    def generate_carbonate_unit(start_x, start_y, start_z, direction):
-        """Generate -O-CO-O- polycarbonate unit"""
+    def generate_pdms_segment(x, y, z, direction, n_units=5):
+        """PDMS: -[Si(CH3)2-O]n- silicone soft segment"""
         nonlocal res_id
-        x, y, z = start_x, start_y, start_z
-        dx, dy, dz = direction
+        for _ in range(n_units):
+            x, y, z, direction = step(x, y, z, 1.64, direction)
+            add_atom("SI", x, y, z, "PDM")
+            # Methyl groups
+            add_atom("C", x + np.random.uniform(0.8, 1.2), y + np.random.uniform(-1, 1), z, "PDM")
+            add_atom("C", x + np.random.uniform(-1.2, -0.8), y + np.random.uniform(-1, 1), z, "PDM")
+            x, y, z, direction = step(x, y, z, 1.64, direction)
+            add_atom("O", x, y, z, "PDM")
+            res_id += 1
+        return x, y, z, direction
 
-        # O
-        add_atom("O", "O", x, y, z, "PCB")
-        x += dx * C_O
-        # C (carbonyl)
-        add_atom("C", "C", x, y, z, "PCB")
-        # O (carbonyl)
-        add_atom("O", "O", x, y + 1.1, z, "PCB")
-        x += dx * C_O
-        # O
-        add_atom("O", "O", x, y, z, "PCB")
+    def generate_urethane_hard(x, y, z, direction):
+        """H12MDI urethane hard segment: -NH-CO-O-[cyclohexyl]-O-CO-NH-"""
+        nonlocal res_id
+        # First urethane
+        x, y, z, direction = step(x, y, z, 1.47, direction)
+        add_atom("N", x, y, z, "URE")
+        x, y, z, direction = step(x, y, z, 1.33, direction)
+        add_atom("C", x, y, z, "URE")
+        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "URE")
+        x, y, z, direction = step(x, y, z, 1.43, direction)
+        add_atom("O", x, y, z, "URE")
+
+        # Cyclohexyl (simplified as carbons)
+        for _ in range(3):
+            x, y, z, direction = step(x, y, z, 1.54, direction)
+            add_atom("C", x, y, z, "URE")
+
+        # Second urethane
+        x, y, z, direction = step(x, y, z, 1.43, direction)
+        add_atom("O", x, y, z, "URE")
+        x, y, z, direction = step(x, y, z, 1.33, direction)
+        add_atom("C", x, y, z, "URE")
+        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "URE")
+        x, y, z, direction = step(x, y, z, 1.47, direction)
+        add_atom("N", x, y, z, "URE")
+
         res_id += 1
-        return x, y, z
+        return x, y, z, direction
 
-    # Generate polymer chains distributed across the membrane
-    np.random.seed(42)
+    def generate_pc_urethane_hard(x, y, z, direction):
+        """Polycarbonate-urethane hard segment for CarboSil"""
+        nonlocal res_id
+        # Carbonate linkage
+        x, y, z, direction = step(x, y, z, 1.43, direction)
+        add_atom("O", x, y, z, "PCB")
+        x, y, z, direction = step(x, y, z, 1.33, direction)
+        add_atom("C", x, y, z, "PCB")
+        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "PCB")
+        x, y, z, direction = step(x, y, z, 1.43, direction)
+        add_atom("O", x, y, z, "PCB")
 
-    for chain_idx in range(num_chains):
-        # Random starting position spread across membrane
-        start_x = np.random.uniform(-15, -10)
-        start_y = np.random.uniform(-20, 20)
-        start_z = np.random.uniform(-thickness/2, thickness/2)
+        # Hexamethylene spacer
+        for _ in range(3):
+            x, y, z, direction = step(x, y, z, 1.54, direction)
+            add_atom("C", x, y, z, "PCB")
 
-        # Chain direction with some randomness
-        dir_x = 1.0
-        dir_y = np.random.uniform(-0.3, 0.3)
-        dir_z = np.random.uniform(-0.2, 0.2)
-        direction = (dir_x, dir_y, dir_z)
+        # Urethane
+        x, y, z, direction = step(x, y, z, 1.47, direction)
+        add_atom("N", x, y, z, "PCB")
+        x, y, z, direction = step(x, y, z, 1.33, direction)
+        add_atom("C", x, y, z, "PCB")
+        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "PCB")
 
-        x, y, z = start_x, start_y, start_z
+        res_id += 1
+        return x, y, z, direction
 
-        # Determine chain composition based on polymer fractions
-        is_carbosil_chain = np.random.random() < carbosil_frac
+    # Generate chains
+    sparsa_total = sparsa_frac
+    carbosil_total = carbosil_frac
+    total = sparsa_total + carbosil_total
+    if total == 0:
+        total = 1
+        sparsa_total = 0.5
+        carbosil_total = 0.5
 
-        # Generate chain with alternating soft and hard segments
-        chain_length = np.random.randint(8, 15)
+    for _ in range(num_chains):
+        # Random start position
+        x = np.random.uniform(-box_size/2, box_size/2)
+        y = np.random.uniform(-box_size/2, box_size/2)
+        z = np.random.uniform(-box_size/2, box_size/2)
+        direction = random_direction()
 
-        for segment in range(chain_length):
-            # Update direction slightly for realistic chain wiggle
-            direction = (
-                direction[0],
-                direction[1] + np.random.uniform(-0.1, 0.1),
-                direction[2] + np.random.uniform(-0.1, 0.1)
-            )
+        # Determine chain type
+        is_carbosil = np.random.random() < (carbosil_total / total)
 
-            if segment % 3 == 2:
-                # Hard segment (urethane linkage)
-                x, y, z = generate_urethane_unit(x, y, z, direction)
+        # Generate 2-4 soft-hard repeat units per chain
+        for _ in range(np.random.randint(2, 4)):
+            if is_carbosil:
+                # CarboSil: PDMS soft + PC-urethane hard
+                x, y, z, direction = generate_pdms_segment(x, y, z, direction, n_units=np.random.randint(4, 7))
+                x, y, z, direction = generate_pc_urethane_hard(x, y, z, direction)
             else:
-                # Soft segment
-                if is_carbosil_chain:
-                    # CarboSil: PDMS + polycarbonate
-                    if segment % 2 == 0:
-                        for _ in range(2):  # 2 PDMS units
-                            x, y, z = generate_pdms_unit(x, y, z, direction)
-                    else:
-                        x, y, z = generate_carbonate_unit(x, y, z, direction)
+                # Sparsa: PEG soft + urethane hard
+                if np.random.random() < 0.7:
+                    x, y, z, direction = generate_peg_segment(x, y, z, direction, n_units=np.random.randint(5, 8))
                 else:
-                    # Sparsa: PEG soft segment
-                    for _ in range(3):  # 3 PEG units
-                        x, y, z = generate_peg_unit(x, y, z, direction)
+                    x, y, z, direction = generate_pcl_segment(x, y, z, direction, n_units=np.random.randint(3, 5))
+                x, y, z, direction = generate_urethane_hard(x, y, z, direction)
 
-            # Stop if chain gets too long
-            if x > 25:
-                break
+            # Wrap around if outside box
+            if abs(x) > box_size/2 or abs(y) > box_size/2 or abs(z) > box_size/2:
+                x = np.random.uniform(-box_size/2, box_size/2)
+                y = np.random.uniform(-box_size/2, box_size/2)
+                z = np.random.uniform(-box_size/2, box_size/2)
+                direction = random_direction()
 
     return atoms
 
@@ -333,35 +364,44 @@ def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None,
 
     pdb_escaped = pdb_data.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
 
-    # Style-based rendering with element-based coloring for realistic look
-    # URE = Urethane (hard segment) - Red/Orange
-    # PDM = PDMS/Silicone (CarboSil soft) - Blue/Cyan
-    # PCB = Polycarbonate (CarboSil) - Purple
+    # Style-based rendering
+    # Segment colors:
     # PEG = Polyether (Sparsa soft) - Green
+    # PCL = Polycaprolactone (Sparsa-2 soft) - Teal
+    # PDM = PDMS/Silicone (CarboSil soft) - Blue
+    # PCB = Polycarbonate (CarboSil hard) - Purple
+    # URE = Urethane (hard segment) - Red/Orange
 
     if style == "stick":
         color_scheme = """
-        // Color by element for realistic look
-        viewer.setStyle({elem: 'C'}, {stick: {radius: 0.15, color: '0x909090'}});
-        viewer.setStyle({elem: 'O'}, {stick: {radius: 0.15, color: '0xe74c3c'}, sphere: {scale: 0.25, color: '0xe74c3c'}});
-        viewer.setStyle({elem: 'N'}, {stick: {radius: 0.15, color: '0x3498db'}, sphere: {scale: 0.25, color: '0x3498db'}});
-        viewer.setStyle({elem: 'SI'}, {stick: {radius: 0.18, color: '0xf39c12'}, sphere: {scale: 0.3, color: '0xf39c12'}});
+        // Color by segment type with stick+ball style
+        viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.12, colorscheme: 'greenCarbon'}});
+        viewer.setStyle({resn: 'PCL'}, {stick: {radius: 0.12, colorscheme: 'cyanCarbon'}});
+        viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.14, colorscheme: 'blueCarbon'}});
+        viewer.setStyle({resn: 'PCB'}, {stick: {radius: 0.12, colorscheme: 'purpleCarbon'}});
+        viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.14, colorscheme: 'orangeCarbon'}});
+        // Highlight specific elements
+        viewer.setStyle({elem: 'N'}, {stick: {radius: 0.14}, sphere: {scale: 0.25, color: '0x3498db'}});
+        viewer.setStyle({elem: 'SI'}, {stick: {radius: 0.16}, sphere: {scale: 0.3, color: '0xf1c40f'}});
         """
     elif style == "sphere":
         color_scheme = """
-        // CPK-style coloring
-        viewer.setStyle({elem: 'C'}, {sphere: {scale: 0.4, color: '0x909090'}});
-        viewer.setStyle({elem: 'O'}, {sphere: {scale: 0.35, color: '0xe74c3c'}});
-        viewer.setStyle({elem: 'N'}, {sphere: {scale: 0.35, color: '0x3498db'}});
-        viewer.setStyle({elem: 'SI'}, {sphere: {scale: 0.5, color: '0xf39c12'}});
+        // Space-filling CPK style
+        viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, colorscheme: 'greenCarbon'}});
+        viewer.setStyle({resn: 'PCL'}, {sphere: {scale: 0.3, colorscheme: 'cyanCarbon'}});
+        viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.32, colorscheme: 'blueCarbon'}});
+        viewer.setStyle({resn: 'PCB'}, {sphere: {scale: 0.3, colorscheme: 'purpleCarbon'}});
+        viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.32, colorscheme: 'orangeCarbon'}});
+        viewer.setStyle({elem: 'SI'}, {sphere: {scale: 0.4, color: '0xf1c40f'}});
         """
-    else:  # line - color by residue type to show polymer segments
+    else:  # line - color by residue type to show polymer segments clearly
         color_scheme = """
-        // Color by segment type
-        viewer.setStyle({resn: 'URE'}, {line: {linewidth: 3, color: '0xe74c3c'}});  // Urethane - Red
-        viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 2, color: '0x3498db'}});  // PDMS - Blue
-        viewer.setStyle({resn: 'PCB'}, {line: {linewidth: 2, color: '0x9b59b6'}});  // Polycarbonate - Purple
-        viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 2, color: '0x2ecc71'}});  // PEG - Green
+        // Wire frame colored by segment type
+        viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 2.5, color: '0x27ae60'}});  // PEG - Green
+        viewer.setStyle({resn: 'PCL'}, {line: {linewidth: 2.5, color: '0x16a085'}});  // PCL - Teal
+        viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 3, color: '0x2980b9'}});    // PDMS - Blue
+        viewer.setStyle({resn: 'PCB'}, {line: {linewidth: 2.5, color: '0x8e44ad'}});  // Polycarbonate - Purple
+        viewer.setStyle({resn: 'URE'}, {line: {linewidth: 3, color: '0xe74c3c'}});    // Urethane - Red
         """
 
     # Molecule colors
