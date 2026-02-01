@@ -228,6 +228,7 @@ def render_3dmol_allatom(atoms, carbosil_frac, molecule_info=None, animate=False
         {mol_sphere_js}
 
         viewer.zoomTo();
+        viewer.zoom(0.6);  // Zoom out to show more context
         viewer.rotate(15, {{x: 1, y: 0, z: 0}});
         viewer.render();
 
@@ -383,6 +384,7 @@ def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None,
         {mol_sphere_js}
 
         viewer.zoomTo();
+        viewer.zoom(0.6);  // Zoom out to show more context
         viewer.rotate(15, {{x: 1, y: 0, z: 0}});
         viewer.render();
 
@@ -399,27 +401,40 @@ with col1:
     st.subheader("Membrane Composition")
 
     # Thickness
-    thickness = st.number_input("Thickness (um)", value=100, min_value=10, max_value=500, step=10)
+    thickness = st.number_input("Thickness (um)", value=200, min_value=10, max_value=500, step=10)
 
-    st.markdown("**Polymers (%)**")
-
-    # Polymer inputs
+    st.markdown("**Sparsa Polymers (%)**")
     c1, c2 = st.columns(2)
     with c1:
-        carbosil_pct = st.number_input("CarboSil", value=70, min_value=0, max_value=100, key="carbosil")
+        sparsa1_pct = st.number_input("Sparsa 1", value=30, min_value=0, max_value=100, key="sparsa1")
     with c2:
-        sparsa_pct = st.number_input("Sparsa", value=30, min_value=0, max_value=100, key="sparsa")
+        sparsa2_pct = st.number_input("Sparsa 2", value=0, min_value=0, max_value=100, key="sparsa2")
+
+    st.markdown("**Carbosil Polymers (%)**")
+    c3, c4 = st.columns(2)
+    with c3:
+        carbosil1_pct = st.number_input("Carbosil 1", value=70, min_value=0, max_value=100, key="carbosil1")
+    with c4:
+        carbosil2_pct = st.number_input("Carbosil 2", value=0, min_value=0, max_value=100, key="carbosil2")
 
     # Normalize
-    total = carbosil_pct + sparsa_pct
+    total = sparsa1_pct + sparsa2_pct + carbosil1_pct + carbosil2_pct
     if total > 0:
-        carbosil_frac = carbosil_pct / total
-        sparsa_frac = sparsa_pct / total
+        sparsa1_frac = sparsa1_pct / total
+        sparsa2_frac = sparsa2_pct / total
+        carbosil1_frac = carbosil1_pct / total
+        carbosil2_frac = carbosil2_pct / total
     else:
-        carbosil_frac = 0.5
-        sparsa_frac = 0.5
+        sparsa1_frac = 0.25
+        sparsa2_frac = 0.25
+        carbosil1_frac = 0.25
+        carbosil2_frac = 0.25
 
-    st.caption(f"Normalized: CarboSil {carbosil_frac*100:.0f}%, Sparsa {sparsa_frac*100:.0f}%")
+    # For backwards compatibility, combine into CarboSil and Sparsa
+    carbosil_frac = carbosil1_frac + carbosil2_frac
+    sparsa_frac = sparsa1_frac + sparsa2_frac
+
+    st.caption(f"Total Sparsa: {sparsa_frac*100:.0f}% | Total Carbosil: {carbosil_frac*100:.0f}%")
 
     # Build button
     if st.button("Build Membrane", type="primary", use_container_width=True):
@@ -427,8 +442,10 @@ with col1:
             try:
                 config = TPUMembraneConfig(
                     polymers={
-                        "CarboSil": carbosil_frac,
-                        "Sparsa": sparsa_frac
+                        "Sparsa1": sparsa1_frac,
+                        "Sparsa2": sparsa2_frac,
+                        "Carbosil1": carbosil1_frac,
+                        "Carbosil2": carbosil2_frac
                     },
                     thickness=float(thickness)
                 )
@@ -445,8 +462,10 @@ with col1:
         report = []
         report.append("TPU Membrane Report")
         report.append("=" * 40)
-        report.append(f"CarboSil: {carbosil_frac*100:.1f}%")
-        report.append(f"Sparsa: {sparsa_frac*100:.1f}%")
+        report.append(f"Sparsa 1: {sparsa1_frac*100:.1f}%")
+        report.append(f"Sparsa 2: {sparsa2_frac*100:.1f}%")
+        report.append(f"Carbosil 1: {carbosil1_frac*100:.1f}%")
+        report.append(f"Carbosil 2: {carbosil2_frac*100:.1f}%")
         report.append(f"Thickness: {thickness} um")
         props = st.session_state.membrane.properties
         report.append(f"Density: {props.density:.3f} g/cm3")

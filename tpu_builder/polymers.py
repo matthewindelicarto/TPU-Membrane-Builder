@@ -130,6 +130,78 @@ Sparsa = PolymerProperties(
     hard_segment=SPARSA_HARD
 )
 
+# Sparsa 1 - Original Sparsa formulation (higher permeability)
+Sparsa1 = PolymerProperties(
+    name="Sparsa1",
+    polymer_type=PolymerType.SPARSA,
+    soft_segment_fraction=0.75,
+    hard_segment_fraction=0.25,
+    density=1.08,
+    water_uptake=8.0,
+    shore_hardness=60,
+    tensile_strength=25,
+    elongation=600,
+    free_volume_fraction=0.08,
+    crystallinity=0.05,
+    hydrophilicity=0.6,
+    soft_segment=SPARSA_SOFT,
+    hard_segment=SPARSA_HARD
+)
+
+# Sparsa 2 - Modified Sparsa formulation (different permeability profile)
+Sparsa2 = PolymerProperties(
+    name="Sparsa2",
+    polymer_type=PolymerType.SPARSA,
+    soft_segment_fraction=0.70,
+    hard_segment_fraction=0.30,
+    density=1.10,
+    water_uptake=6.0,
+    shore_hardness=65,
+    tensile_strength=28,
+    elongation=550,
+    free_volume_fraction=0.06,
+    crystallinity=0.08,
+    hydrophilicity=0.5,
+    soft_segment=SPARSA_SOFT,
+    hard_segment=SPARSA_HARD
+)
+
+# Carbosil 1 - Original Carbosil formulation
+Carbosil1 = PolymerProperties(
+    name="Carbosil1",
+    polymer_type=PolymerType.CARBOSIL,
+    soft_segment_fraction=0.65,
+    hard_segment_fraction=0.35,
+    density=1.05,
+    water_uptake=0.5,
+    shore_hardness=80,
+    tensile_strength=35,
+    elongation=400,
+    free_volume_fraction=0.03,
+    crystallinity=0.15,
+    hydrophilicity=0.2,
+    soft_segment=CARBOSIL_SOFT,
+    hard_segment=CARBOSIL_HARD
+)
+
+# Carbosil 2 - Modified Carbosil formulation
+Carbosil2 = PolymerProperties(
+    name="Carbosil2",
+    polymer_type=PolymerType.CARBOSIL,
+    soft_segment_fraction=0.60,
+    hard_segment_fraction=0.40,
+    density=1.07,
+    water_uptake=0.3,
+    shore_hardness=85,
+    tensile_strength=38,
+    elongation=350,
+    free_volume_fraction=0.025,
+    crystallinity=0.18,
+    hydrophilicity=0.15,
+    soft_segment=CARBOSIL_SOFT,
+    hard_segment=CARBOSIL_HARD
+)
+
 
 class PolymerLibrary:
     """Library of available TPU polymers"""
@@ -137,7 +209,11 @@ class PolymerLibrary:
     def __init__(self):
         self._polymers = {
             "CarboSil": CarboSil,
-            "Sparsa": Sparsa
+            "Sparsa": Sparsa,
+            "Sparsa1": Sparsa1,
+            "Sparsa2": Sparsa2,
+            "Carbosil1": Carbosil1,
+            "Carbosil2": Carbosil2
         }
 
     def get(self, name: str) -> PolymerProperties:

@@ -20,6 +20,9 @@ build/
 # Output files
 Outputs/
 
+# Experimental data
+Data/
+
 # Temporary files
 *.tmp
 *~

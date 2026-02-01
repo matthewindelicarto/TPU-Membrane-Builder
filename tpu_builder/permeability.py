@@ -1,13 +1,133 @@
 """
 Permeability prediction for TPU membranes
 
-Uses solution-diffusion model adapted for polymer membranes.
+Uses regression model trained on experimental Franz cell data.
 """
 
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 from .polymers import PolymerLibrary, calculate_blend_properties
+
+
+# Experimental training data from Franz cell experiments
+# Format: (sparsa1_wt%, sparsa2_wt%, carbosil1_wt%, carbosil2_wt%, thickness_cm, permeability_cm2_s)
+# Only includes validated data points (non-red rows)
+
+PHENOL_TRAINING_DATA = [
+    # M-01: 100% Sparsa 1
+    (100, 0, 0, 0, 0.0254, 1.60618e-06),
+    # M-02: 100% Sparsa 2
+    (0, 100, 0, 0, 0.037, 7.55954e-07),
+    # M-03: 100% Carbosil 1
+    (0, 0, 100, 0, 0.021, 1.68063e-07),
+    # M-05: 60% Sparsa 1, 40% Sparsa 2
+    (60, 40, 0, 0, 0.0202, 5.75051e-07),
+    # M-07: 30% Sparsa 1, 70% Sparsa 2
+    (30, 70, 0, 0, 0.0208, 3.39749e-08),
+    # M-11: 10% Sparsa 1, 20% Sparsa 2, 70% Carbosil 1
+    (10, 20, 70, 0, 0.016, 1.59367e-07),
+]
+
+MCRESOL_TRAINING_DATA = [
+    # M-02 (2): 100% Sparsa 2
+    (0, 100, 0, 0, 0.018, 1.0215e-07),
+    # M-03 (2): 100% Carbosil 1
+    (0, 0, 100, 0, 0.0152, 7.64893e-08),
+    # M-07: 30% Sparsa 1, 70% Sparsa 2
+    (30, 70, 0, 0, 0.0208, 9.7528e-08),
+    # M-11: 10% Sparsa 1, 20% Sparsa 2, 70% Carbosil 1
+    (10, 20, 70, 0, 0.016, 1.09746e-07),
+]
+
+
+class PermeabilityRegressor:
+    """
+    Regression model for permeability prediction based on experimental data.
+    Uses inverse distance weighting interpolation for small datasets.
+    """
+
+    def __init__(self, molecule_type: str = 'phenol'):
+        self.molecule_type = molecule_type
+        self._training_data = None
+        self._load_data()
+
+    def _load_data(self):
+        """Load training data for the molecule type"""
+        if self.molecule_type == 'phenol':
+            self._training_data = PHENOL_TRAINING_DATA
+        elif self.molecule_type == 'm-cresol':
+            self._training_data = MCRESOL_TRAINING_DATA
+        else:
+            self._training_data = PHENOL_TRAINING_DATA
+
+    def predict(self, sparsa1_frac: float, sparsa2_frac: float,
+                carbosil1_frac: float, carbosil2_frac: float,
+                thickness_cm: float) -> float:
+        """
+        Predict permeability using inverse distance weighted interpolation.
+
+        Args:
+            sparsa1_frac: Fraction of Sparsa 1 (0-1)
+            sparsa2_frac: Fraction of Sparsa 2 (0-1)
+            carbosil1_frac: Fraction of Carbosil 1 (0-1)
+            carbosil2_frac: Fraction of Carbosil 2 (0-1)
+            thickness_cm: Membrane thickness in cm
+
+        Returns:
+            Predicted permeability in cm^2/s
+        """
+        if not self._training_data:
+            return 1e-7  # Default fallback
+
+        # Query point (composition only, thickness handled separately)
+        query = np.array([sparsa1_frac, sparsa2_frac, carbosil1_frac, carbosil2_frac])
+
+        # Calculate weighted average based on composition similarity
+        weights = []
+        log_perms = []
+        thickness_ratios = []
+
+        for sparsa1, sparsa2, carbosil1, carbosil2, thick, perm in self._training_data:
+            total = sparsa1 + sparsa2 + carbosil1 + carbosil2
+            if total == 0:
+                total = 100
+
+            point = np.array([sparsa1/total, sparsa2/total, carbosil1/total, carbosil2/total])
+
+            # Euclidean distance in composition space
+            dist = np.linalg.norm(query - point)
+
+            # Inverse distance weight (with small epsilon to avoid division by zero)
+            weight = 1.0 / (dist + 0.01) ** 2
+
+            weights.append(weight)
+            log_perms.append(np.log10(perm))
+            thickness_ratios.append(thick)
+
+        weights = np.array(weights)
+        log_perms = np.array(log_perms)
+        thickness_ratios = np.array(thickness_ratios)
+
+        # Normalize weights
+        weights = weights / np.sum(weights)
+
+        # Weighted average of log permeability
+        base_log_perm = np.sum(weights * log_perms)
+
+        # Weighted average reference thickness
+        ref_thickness = np.sum(weights * thickness_ratios)
+
+        # Adjust for thickness difference (permeability scales inversely with thickness)
+        # P ~ 1/L, so log(P) ~ -log(L)
+        thickness_adjustment = np.log10(ref_thickness / thickness_cm) if thickness_cm > 0 else 0
+
+        log_perm = base_log_perm + thickness_adjustment
+
+        # Clamp to reasonable range
+        log_perm = np.clip(log_perm, -12, -4)
+
+        return 10 ** log_perm
 
 
 @dataclass
@@ -107,14 +227,9 @@ class TPUPermeabilityPredictor:
     """
     Predicts molecular permeability through TPU membranes
 
-    Uses solution-diffusion model:
-    P = D * K / L
-
-    where:
-    - P = permeability coefficient
-    - D = diffusivity in membrane
-    - K = partition coefficient (solubility)
-    - L = membrane thickness
+    Uses regression model trained on experimental Franz cell data
+    for phenol and m-cresol. Falls back to solution-diffusion model
+    for other molecules.
     """
 
     # Reference values for normalization
@@ -136,6 +251,44 @@ class TPUPermeabilityPredictor:
         # Calculate blend properties
         self.blend_props = calculate_blend_properties(self.composition, self.library)
 
+        # Initialize regression models for phenol and m-cresol
+        self._phenol_regressor = PermeabilityRegressor('phenol')
+        self._mcresol_regressor = PermeabilityRegressor('m-cresol')
+
+        # Parse composition into Sparsa/Carbosil fractions
+        self._parse_composition()
+
+    def _parse_composition(self):
+        """Parse composition dict into Sparsa1, Sparsa2, Carbosil1, Carbosil2 fractions"""
+        # Map old naming to new 4-component system
+        # "Sparsa" -> Sparsa 1, "CarboSil" -> Carbosil 1 for backwards compatibility
+        total = 0
+        self.sparsa1_frac = 0
+        self.sparsa2_frac = 0
+        self.carbosil1_frac = 0
+        self.carbosil2_frac = 0
+
+        for name, frac in self.composition.items():
+            name_lower = name.lower()
+            if 'sparsa' in name_lower:
+                if '2' in name_lower or 'sparsa2' in name_lower:
+                    self.sparsa2_frac = frac
+                else:
+                    self.sparsa1_frac = frac
+            elif 'carbosil' in name_lower or 'carbo' in name_lower:
+                if '2' in name_lower or 'carbosil2' in name_lower:
+                    self.carbosil2_frac = frac
+                else:
+                    self.carbosil1_frac = frac
+            total += frac
+
+        # Normalize if needed
+        if total > 0 and abs(total - 1.0) > 0.01:
+            self.sparsa1_frac /= total
+            self.sparsa2_frac /= total
+            self.carbosil1_frac /= total
+            self.carbosil2_frac /= total
+
     def calculate(
         self,
         molecule: MoleculeDescriptor
@@ -143,20 +296,39 @@ class TPUPermeabilityPredictor:
         """
         Calculate permeability for a molecule through the membrane
 
+        Uses trained regression model for phenol and m-cresol,
+        falls back to solution-diffusion model for other molecules.
+
         Args:
             molecule: MoleculeDescriptor for the permeating species
 
         Returns:
             PermeabilityResult with all calculated values
         """
-        # Calculate diffusivity
-        D = self._calculate_diffusivity(molecule)
+        mol_name = molecule.name.lower()
 
-        # Calculate solubility/partition coefficient
-        K = self._calculate_solubility(molecule)
-
-        # Permeability from solution-diffusion model
-        P = D * K / self.thickness_cm
+        # Use regression model for phenol and m-cresol
+        if mol_name == 'phenol':
+            P = self._phenol_regressor.predict(
+                self.sparsa1_frac, self.sparsa2_frac,
+                self.carbosil1_frac, self.carbosil2_frac,
+                self.thickness_cm
+            )
+            D = P * self.thickness_cm  # Estimate diffusivity
+            K = 1.0  # Not separately estimated from regression
+        elif mol_name == 'm-cresol':
+            P = self._mcresol_regressor.predict(
+                self.sparsa1_frac, self.sparsa2_frac,
+                self.carbosil1_frac, self.carbosil2_frac,
+                self.thickness_cm
+            )
+            D = P * self.thickness_cm
+            K = 1.0
+        else:
+            # Fall back to theoretical model for glucose, oxygen, etc.
+            D = self._calculate_diffusivity(molecule)
+            K = self._calculate_solubility(molecule)
+            P = D * K / self.thickness_cm
 
         # Calculate flux at unit concentration gradient
         flux = P  # mol/(cm²·s) for 1 mol/cm³ gradient
@@ -164,10 +336,10 @@ class TPUPermeabilityPredictor:
         # Log permeability
         log_P = np.log10(max(P, 1e-20))
 
-        # Classification
+        # Classification based on experimental data ranges
         if log_P > -6:
             classification = "high"
-        elif log_P > -8:
+        elif log_P > -7.5:
             classification = "moderate"
         else:
             classification = "low"
