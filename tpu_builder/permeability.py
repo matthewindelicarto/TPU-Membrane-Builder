@@ -40,6 +40,25 @@ MCRESOL_TRAINING_DATA = [
     (10, 20, 70, 0, 0.016, 1.09746e-07),
 ]
 
+# Glucose permeability data from Andre's experiments
+# Format: (sparsa1_wt%, sparsa2_wt%, carbosil1_wt%, carbosil2_wt%, thickness_cm, permeability_cm2_s)
+# Note: This data uses Sparsa 2 and Carbosil 1 blends
+# Thickness assumed to be ~0.02 cm (200 um) as typical membrane thickness
+GLUCOSE_TRAINING_DATA = [
+    # 100% Carbosil 1
+    (0, 0, 100, 0, 0.02, 1.00e-13),
+    # 30% Sparsa 2, 70% Carbosil 1
+    (0, 30, 70, 0, 0.02, 8.30e-11),
+    # 40% Sparsa 2, 60% Carbosil 1
+    (0, 40, 60, 0, 0.02, 7.80e-10),
+    # 60% Sparsa 2, 40% Carbosil 1
+    (0, 60, 40, 0, 0.02, 9.68e-09),
+    # 80% Sparsa 2, 20% Carbosil 1
+    (0, 80, 20, 0, 0.02, 2.12e-08),
+    # 100% Sparsa 2
+    (0, 100, 0, 0, 0.02, 2.19e-08),
+]
+
 
 class PermeabilityRegressor:
     """
@@ -58,6 +77,8 @@ class PermeabilityRegressor:
             self._training_data = PHENOL_TRAINING_DATA
         elif self.molecule_type == 'm-cresol':
             self._training_data = MCRESOL_TRAINING_DATA
+        elif self.molecule_type == 'glucose':
+            self._training_data = GLUCOSE_TRAINING_DATA
         else:
             self._training_data = PHENOL_TRAINING_DATA
 
@@ -228,8 +249,8 @@ class TPUPermeabilityPredictor:
     Predicts molecular permeability through TPU membranes
 
     Uses regression model trained on experimental Franz cell data
-    for phenol and m-cresol. Falls back to solution-diffusion model
-    for other molecules.
+    for phenol, m-cresol, and glucose. Falls back to solution-diffusion
+    model for other molecules (e.g., oxygen).
     """
 
     # Reference values for normalization
@@ -251,9 +272,10 @@ class TPUPermeabilityPredictor:
         # Calculate blend properties
         self.blend_props = calculate_blend_properties(self.composition, self.library)
 
-        # Initialize regression models for phenol and m-cresol
+        # Initialize regression models for phenol, m-cresol, and glucose
         self._phenol_regressor = PermeabilityRegressor('phenol')
         self._mcresol_regressor = PermeabilityRegressor('m-cresol')
+        self._glucose_regressor = PermeabilityRegressor('glucose')
 
         # Parse composition into Sparsa/Carbosil fractions
         self._parse_composition()
@@ -307,7 +329,7 @@ class TPUPermeabilityPredictor:
         """
         mol_name = molecule.name.lower()
 
-        # Use regression model for phenol and m-cresol
+        # Use regression model for phenol, m-cresol, and glucose
         if mol_name == 'phenol':
             P = self._phenol_regressor.predict(
                 self.sparsa1_frac, self.sparsa2_frac,
@@ -324,8 +346,16 @@ class TPUPermeabilityPredictor:
             )
             D = P * self.thickness_cm
             K = 1.0
+        elif mol_name == 'glucose':
+            P = self._glucose_regressor.predict(
+                self.sparsa1_frac, self.sparsa2_frac,
+                self.carbosil1_frac, self.carbosil2_frac,
+                self.thickness_cm
+            )
+            D = P * self.thickness_cm
+            K = 1.0
         else:
-            # Fall back to theoretical model for glucose, oxygen, etc.
+            # Fall back to theoretical model for oxygen, etc.
             D = self._calculate_diffusivity(molecule)
             K = self._calculate_solubility(molecule)
             P = D * K / self.thickness_cm
