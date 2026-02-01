@@ -23,96 +23,169 @@ if 'perm_result' not in st.session_state:
     st.session_state.perm_result = None
 
 
-def generate_pdb_from_structure(membrane, carbosil_frac):
-    """Generate PDB-like atom data for all-atom visualization"""
-    structure = membrane.get_structure()
+def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=12):
+    """
+    Generate realistic all-atom polymer chain structures.
+
+    CarboSil structure: -[Si(CH3)2-O]n- (PDMS soft) + -O-CO-O- (polycarbonate) + -NH-CO-O- (urethane hard)
+    Sparsa structure: -[CH2-CH2-O]n- (PEG soft) + -NH-CO-O- (urethane hard)
+    """
     atoms = []
-
-    nx, ny, nz = structure.shape
-    scale = 2.0  # Angstrom-like scaling
-
-    # Generate atoms representing the polymer structure
     atom_id = 1
     res_id = 1
 
-    # Sample with coarser resolution for performance (step=3 reduces atoms by ~27x)
-    step = 3
+    # Membrane dimensions for positioning chains
+    thickness = membrane.properties.thickness_um * 0.01  # Scale to visualization units
 
-    # Limit total atoms for browser performance
-    max_atoms = 2000
+    # Bond lengths in Angstroms
+    C_C = 1.54
+    C_O = 1.43
+    C_N = 1.47
+    Si_O = 1.64
+    Si_C = 1.87
+    C_double_O = 1.23
 
-    for i in range(0, nx, step):
-        for j in range(0, ny, step):
-            for k in range(0, nz, step):
-                if atom_id > max_atoms:
-                    break
-                val = structure[i, j, k]
-                if val > 0.1:  # Higher threshold to reduce atoms
-                    x = (i - nx/2) * scale
-                    y = (j - ny/2) * scale
-                    z = (k - nz/2) * scale
+    def add_atom(name, element, x, y, z, res_name):
+        nonlocal atom_id, res_id
+        atoms.append({
+            'id': atom_id,
+            'name': name,
+            'res_name': res_name,
+            'res_id': res_id,
+            'x': x, 'y': y, 'z': z,
+            'element': element
+        })
+        atom_id += 1
 
-                    # Assign atom types based on segment type and position
-                    if val > 0.6:
-                        # Hard segment - urethane linkages
-                        if (i + j + k) % 3 == 0:
-                            atom_type = "N"  # Nitrogen in urethane
-                            element = "N"
-                        elif (i + j + k) % 3 == 1:
-                            atom_type = "C"  # Carbon
-                            element = "C"
-                        else:
-                            atom_type = "O"  # Oxygen in urethane
-                            element = "O"
-                        res_name = "URE"  # Urethane
-                    elif val > 0.3:
-                        # Soft segment
-                        if carbosil_frac > 0.5:
-                            # PDMS (silicone) - Si, O, C
-                            if (i + j) % 3 == 0:
-                                atom_type = "SI"
-                                element = "SI"
-                            elif (i + j) % 3 == 1:
-                                atom_type = "O"
-                                element = "O"
-                            else:
-                                atom_type = "C"
-                                element = "C"
-                            res_name = "PDM"  # PDMS
-                        else:
-                            # Polyether (PEG-like) - C, O
-                            if (i + j) % 2 == 0:
-                                atom_type = "C"
-                                element = "C"
-                            else:
-                                atom_type = "O"
-                                element = "O"
-                            res_name = "PEG"  # Polyether
+    def generate_pdms_unit(start_x, start_y, start_z, direction):
+        """Generate -[Si(CH3)2-O]- PDMS repeat unit"""
+        nonlocal res_id
+        x, y, z = start_x, start_y, start_z
+        dx, dy, dz = direction
+
+        # Si atom
+        add_atom("SI", "SI", x, y, z, "PDM")
+        # Methyl carbons on Si
+        add_atom("C", "C", x + 1.2, y + 1.0, z, "PDM")
+        add_atom("C", "C", x + 1.2, y - 1.0, z, "PDM")
+        # O bridging
+        x += dx * Si_O
+        y += dy * Si_O * 0.5
+        z += dz * Si_O * 0.3
+        add_atom("O", "O", x, y, z, "PDM")
+        res_id += 1
+        return x, y, z
+
+    def generate_peg_unit(start_x, start_y, start_z, direction):
+        """Generate -[CH2-CH2-O]- PEG repeat unit"""
+        nonlocal res_id
+        x, y, z = start_x, start_y, start_z
+        dx, dy, dz = direction
+
+        # CH2
+        add_atom("C", "C", x, y, z, "PEG")
+        x += dx * C_C
+        y += dy * C_C * 0.3
+        # CH2
+        add_atom("C", "C", x, y, z, "PEG")
+        x += dx * C_O
+        y += dy * C_O * 0.2
+        z += dz * C_O * 0.4
+        # O ether
+        add_atom("O", "O", x, y, z, "PEG")
+        res_id += 1
+        return x, y, z
+
+    def generate_urethane_unit(start_x, start_y, start_z, direction):
+        """Generate -NH-CO-O- urethane linkage"""
+        nonlocal res_id
+        x, y, z = start_x, start_y, start_z
+        dx, dy, dz = direction
+
+        # N (from amine)
+        add_atom("N", "N", x, y, z, "URE")
+        x += dx * C_N
+        # C (carbonyl)
+        add_atom("C", "C", x, y, z, "URE")
+        # O (carbonyl double bond)
+        add_atom("O", "O", x, y + 1.2, z, "URE")
+        x += dx * C_O
+        y += dy * C_O * 0.3
+        # O (ester)
+        add_atom("O", "O", x, y, z, "URE")
+        res_id += 1
+        return x, y, z
+
+    def generate_carbonate_unit(start_x, start_y, start_z, direction):
+        """Generate -O-CO-O- polycarbonate unit"""
+        nonlocal res_id
+        x, y, z = start_x, start_y, start_z
+        dx, dy, dz = direction
+
+        # O
+        add_atom("O", "O", x, y, z, "PCB")
+        x += dx * C_O
+        # C (carbonyl)
+        add_atom("C", "C", x, y, z, "PCB")
+        # O (carbonyl)
+        add_atom("O", "O", x, y + 1.1, z, "PCB")
+        x += dx * C_O
+        # O
+        add_atom("O", "O", x, y, z, "PCB")
+        res_id += 1
+        return x, y, z
+
+    # Generate polymer chains distributed across the membrane
+    np.random.seed(42)
+
+    for chain_idx in range(num_chains):
+        # Random starting position spread across membrane
+        start_x = np.random.uniform(-15, -10)
+        start_y = np.random.uniform(-20, 20)
+        start_z = np.random.uniform(-thickness/2, thickness/2)
+
+        # Chain direction with some randomness
+        dir_x = 1.0
+        dir_y = np.random.uniform(-0.3, 0.3)
+        dir_z = np.random.uniform(-0.2, 0.2)
+        direction = (dir_x, dir_y, dir_z)
+
+        x, y, z = start_x, start_y, start_z
+
+        # Determine chain composition based on polymer fractions
+        is_carbosil_chain = np.random.random() < carbosil_frac
+
+        # Generate chain with alternating soft and hard segments
+        chain_length = np.random.randint(8, 15)
+
+        for segment in range(chain_length):
+            # Update direction slightly for realistic chain wiggle
+            direction = (
+                direction[0],
+                direction[1] + np.random.uniform(-0.1, 0.1),
+                direction[2] + np.random.uniform(-0.1, 0.1)
+            )
+
+            if segment % 3 == 2:
+                # Hard segment (urethane linkage)
+                x, y, z = generate_urethane_unit(x, y, z, direction)
+            else:
+                # Soft segment
+                if is_carbosil_chain:
+                    # CarboSil: PDMS + polycarbonate
+                    if segment % 2 == 0:
+                        for _ in range(2):  # 2 PDMS units
+                            x, y, z = generate_pdms_unit(x, y, z, direction)
                     else:
-                        # Interface/amorphous region
-                        atom_type = "C"
-                        element = "C"
-                        res_name = "AMO"
+                        x, y, z = generate_carbonate_unit(x, y, z, direction)
+                else:
+                    # Sparsa: PEG soft segment
+                    for _ in range(3):  # 3 PEG units
+                        x, y, z = generate_peg_unit(x, y, z, direction)
 
-                    atoms.append({
-                        'id': atom_id,
-                        'name': atom_type,
-                        'res_name': res_name,
-                        'res_id': res_id,
-                        'x': x,
-                        'y': y,
-                        'z': z,
-                        'element': element,
-                        'val': val
-                    })
-                    atom_id += 1
-
-                    if atom_id % 50 == 0:
-                        res_id += 1
-            if atom_id > max_atoms:
+            # Stop if chain gets too long
+            if x > 25:
                 break
-        if atom_id > max_atoms:
-            break
 
     return atoms
 
@@ -260,52 +333,36 @@ def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None,
 
     pdb_escaped = pdb_data.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
 
-    # Style-based rendering
+    # Style-based rendering with element-based coloring for realistic look
+    # URE = Urethane (hard segment) - Red/Orange
+    # PDM = PDMS/Silicone (CarboSil soft) - Blue/Cyan
+    # PCB = Polycarbonate (CarboSil) - Purple
+    # PEG = Polyether (Sparsa soft) - Green
+
     if style == "stick":
-        if carbosil_frac > 0.5:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0x3498db'}, sphere: {scale: 0.2, color: '0x3498db'}});
-            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x1abc9c'}, sphere: {scale: 0.18, color: '0x1abc9c'}});
-            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0x2ecc71'}, sphere: {scale: 0.18, color: '0x2ecc71'}});
-            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
-            """
-        else:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {stick: {radius: 0.12, color: '0xe74c3c'}, sphere: {scale: 0.2, color: '0xe74c3c'}});
-            viewer.setStyle({resn: 'PDM'}, {stick: {radius: 0.1, color: '0x9b59b6'}, sphere: {scale: 0.18, color: '0x9b59b6'}});
-            viewer.setStyle({resn: 'PEG'}, {stick: {radius: 0.1, color: '0xf39c12'}, sphere: {scale: 0.18, color: '0xf39c12'}});
-            viewer.setStyle({resn: 'AMO'}, {stick: {radius: 0.08, color: '0x7f8c8d'}, sphere: {scale: 0.15, color: '0x7f8c8d'}});
-            """
+        color_scheme = """
+        // Color by element for realistic look
+        viewer.setStyle({elem: 'C'}, {stick: {radius: 0.15, color: '0x909090'}});
+        viewer.setStyle({elem: 'O'}, {stick: {radius: 0.15, color: '0xe74c3c'}, sphere: {scale: 0.25, color: '0xe74c3c'}});
+        viewer.setStyle({elem: 'N'}, {stick: {radius: 0.15, color: '0x3498db'}, sphere: {scale: 0.25, color: '0x3498db'}});
+        viewer.setStyle({elem: 'SI'}, {stick: {radius: 0.18, color: '0xf39c12'}, sphere: {scale: 0.3, color: '0xf39c12'}});
+        """
     elif style == "sphere":
-        if carbosil_frac > 0.5:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0x3498db'}});
-            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x1abc9c'}});
-            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0x2ecc71'}});
-            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
-            """
-        else:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {sphere: {scale: 0.35, color: '0xe74c3c'}});
-            viewer.setStyle({resn: 'PDM'}, {sphere: {scale: 0.3, color: '0x9b59b6'}});
-            viewer.setStyle({resn: 'PEG'}, {sphere: {scale: 0.3, color: '0xf39c12'}});
-            viewer.setStyle({resn: 'AMO'}, {sphere: {scale: 0.25, color: '0x7f8c8d'}});
-            """
-    else:  # line
-        if carbosil_frac > 0.5:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0x3498db'}});
-            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x1abc9c'}});
-            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0x2ecc71'}});
-            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
-            """
-        else:
-            color_scheme = """
-            viewer.setStyle({resn: 'URE'}, {line: {linewidth: 2, color: '0xe74c3c'}});
-            viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 1.5, color: '0x9b59b6'}});
-            viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 1.5, color: '0xf39c12'}});
-            viewer.setStyle({resn: 'AMO'}, {line: {linewidth: 1, color: '0x7f8c8d'}});
-            """
+        color_scheme = """
+        // CPK-style coloring
+        viewer.setStyle({elem: 'C'}, {sphere: {scale: 0.4, color: '0x909090'}});
+        viewer.setStyle({elem: 'O'}, {sphere: {scale: 0.35, color: '0xe74c3c'}});
+        viewer.setStyle({elem: 'N'}, {sphere: {scale: 0.35, color: '0x3498db'}});
+        viewer.setStyle({elem: 'SI'}, {sphere: {scale: 0.5, color: '0xf39c12'}});
+        """
+    else:  # line - color by residue type to show polymer segments
+        color_scheme = """
+        // Color by segment type
+        viewer.setStyle({resn: 'URE'}, {line: {linewidth: 3, color: '0xe74c3c'}});  // Urethane - Red
+        viewer.setStyle({resn: 'PDM'}, {line: {linewidth: 2, color: '0x3498db'}});  // PDMS - Blue
+        viewer.setStyle({resn: 'PCB'}, {line: {linewidth: 2, color: '0x9b59b6'}});  // Polycarbonate - Purple
+        viewer.setStyle({resn: 'PEG'}, {line: {linewidth: 2, color: '0x2ecc71'}});  // PEG - Green
+        """
 
     # Molecule colors
     mol_colors = {
@@ -551,16 +608,23 @@ with col2:
                 'name': st.session_state.perm_result['mol_name']
             }
 
-        # Generate all-atom structure
-        atoms = generate_pdb_from_structure(
+        # Calculate composition fractions
+        comp = membrane.composition
+        sparsa_frac = comp.get("Sparsa1", 0) + comp.get("Sparsa2", 0) + comp.get("Sparsa", 0)
+        carbosil_frac = comp.get("Carbosil1", 0) + comp.get("Carbosil2", 0) + comp.get("CarboSil", 0)
+
+        # Generate all-atom polymer chain structure
+        atoms = generate_polymer_chains(
             membrane,
-            membrane.composition.get("CarboSil", 0.5)
+            sparsa_frac,
+            carbosil_frac,
+            num_chains=15
         )
 
         # Render 3D viewer with style support
         render_3dmol_allatom_styled(
             atoms,
-            membrane.composition.get("CarboSil", 0.5),
+            carbosil_frac,
             style,
             mol_info,
             animate
