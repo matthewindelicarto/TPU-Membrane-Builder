@@ -25,15 +25,10 @@ if 'perm_result' not in st.session_state:
 
 def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25):
     """
-    Generate realistic random-coil polymer membrane structure.
+    Generate a dense rectangular membrane slab filled with polymer chains.
 
-    Based on actual polymer chemistry:
-    - Sparsa-1: PEG/PPG polyether (70-85%) + H12MDI urethane (15-30%)
-    - Sparsa-2: Polyester/PCL soft + H12MDI urethane (tighter packing)
-    - CarboSil-1: PDMS (50-75%) + polycarbonate-urethane (25-50%)
-    - CarboSil-2: PDMS + higher hard segment (stiffer)
-
-    Creates tangled random-coil chains filling a membrane volume.
+    Creates a box-shaped cross-section of the membrane with tangled
+    polymer chains that fill the volume densely.
     """
     atoms = []
     atom_id = 1
@@ -41,11 +36,18 @@ def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25)
 
     np.random.seed(42)
 
-    # Membrane box (Angstroms)
-    box_size = 35
+    # Rectangular membrane slab dimensions (Angstroms)
+    # Wide and tall, but thin in Z (membrane cross-section)
+    box_x = 40  # width
+    box_y = 40  # height
+    box_z = 15  # thickness (membrane thickness direction)
 
     def add_atom(element, x, y, z, res_name):
         nonlocal atom_id, res_id
+        # Clamp atoms to stay within the box
+        x = max(-box_x/2, min(box_x/2, x))
+        y = max(-box_y/2, min(box_y/2, y))
+        z = max(-box_z/2, min(box_z/2, z))
         atoms.append({
             'id': atom_id,
             'name': element,
@@ -57,27 +59,41 @@ def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25)
         atom_id += 1
 
     def random_direction():
-        """Generate random unit vector for chain growth"""
+        """Generate random unit vector, biased to stay in XY plane"""
         theta = np.random.uniform(0, 2 * np.pi)
-        phi = np.random.uniform(0.4, np.pi - 0.4)
+        # Bias phi to be mostly horizontal (XY plane)
+        phi = np.random.uniform(np.pi/3, 2*np.pi/3)
         return (
             np.sin(phi) * np.cos(theta),
             np.sin(phi) * np.sin(theta),
-            np.cos(phi)
+            np.cos(phi) * 0.3  # Reduce Z component
         )
 
-    def step(x, y, z, bond_len, direction, wobble=0.3):
-        """Take a step along chain with some randomness"""
+    def step(x, y, z, bond_len, direction, wobble=0.4):
+        """Take a step along chain with randomness"""
         dx, dy, dz = direction
-        # Add wobble
         dx += np.random.uniform(-wobble, wobble)
         dy += np.random.uniform(-wobble, wobble)
-        dz += np.random.uniform(-wobble, wobble)
-        # Normalize and scale
+        dz += np.random.uniform(-wobble * 0.3, wobble * 0.3)  # Less Z wobble
         mag = np.sqrt(dx*dx + dy*dy + dz*dz)
         if mag > 0:
             dx, dy, dz = dx/mag * bond_len, dy/mag * bond_len, dz/mag * bond_len
-        return x + dx, y + dy, z + dz, (dx/bond_len, dy/bond_len, dz/bond_len)
+        new_x, new_y, new_z = x + dx, y + dy, z + dz
+
+        # Bounce off walls
+        if abs(new_x) > box_x/2:
+            dx = -dx
+            new_x = x + dx
+        if abs(new_y) > box_y/2:
+            dy = -dy
+            new_y = y + dy
+        if abs(new_z) > box_z/2:
+            dz = -dz
+            new_z = z + dz
+
+        return new_x, new_y, new_z, (dx/bond_len if bond_len > 0 else 0,
+                                      dy/bond_len if bond_len > 0 else 0,
+                                      dz/bond_len if bond_len > 0 else 0)
 
     def generate_peg_segment(x, y, z, direction, n_units=6):
         """PEG/PPG: -[CH2-CH2-O]n- polyether soft segment"""
@@ -100,8 +116,7 @@ def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25)
             add_atom("O", x, y, z, "PCL")
             x, y, z, direction = step(x, y, z, 1.33, direction)
             add_atom("C", x, y, z, "PCL")
-            # Carbonyl O to side
-            add_atom("O", x + np.random.uniform(-0.8, 0.8), y + 1.2, z, "PCL")
+            add_atom("O", x + np.random.uniform(-0.6, 0.6), y + 0.8, z, "PCL")
             for _ in range(3):
                 x, y, z, direction = step(x, y, z, 1.54, direction)
                 add_atom("C", x, y, z, "PCL")
@@ -115,70 +130,58 @@ def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25)
             x, y, z, direction = step(x, y, z, 1.64, direction)
             add_atom("SI", x, y, z, "PDM")
             # Methyl groups
-            add_atom("C", x + np.random.uniform(0.8, 1.2), y + np.random.uniform(-1, 1), z, "PDM")
-            add_atom("C", x + np.random.uniform(-1.2, -0.8), y + np.random.uniform(-1, 1), z, "PDM")
+            add_atom("C", x + np.random.uniform(0.6, 1.0), y + np.random.uniform(-0.8, 0.8), z, "PDM")
+            add_atom("C", x + np.random.uniform(-1.0, -0.6), y + np.random.uniform(-0.8, 0.8), z, "PDM")
             x, y, z, direction = step(x, y, z, 1.64, direction)
             add_atom("O", x, y, z, "PDM")
             res_id += 1
         return x, y, z, direction
 
     def generate_urethane_hard(x, y, z, direction):
-        """H12MDI urethane hard segment: -NH-CO-O-[cyclohexyl]-O-CO-NH-"""
+        """H12MDI urethane hard segment"""
         nonlocal res_id
-        # First urethane
         x, y, z, direction = step(x, y, z, 1.47, direction)
         add_atom("N", x, y, z, "URE")
         x, y, z, direction = step(x, y, z, 1.33, direction)
         add_atom("C", x, y, z, "URE")
-        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "URE")
+        add_atom("O", x + np.random.uniform(-0.4, 0.4), y + 0.9, z, "URE")
         x, y, z, direction = step(x, y, z, 1.43, direction)
         add_atom("O", x, y, z, "URE")
-
-        # Cyclohexyl (simplified as carbons)
         for _ in range(3):
             x, y, z, direction = step(x, y, z, 1.54, direction)
             add_atom("C", x, y, z, "URE")
-
-        # Second urethane
         x, y, z, direction = step(x, y, z, 1.43, direction)
         add_atom("O", x, y, z, "URE")
         x, y, z, direction = step(x, y, z, 1.33, direction)
         add_atom("C", x, y, z, "URE")
-        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "URE")
+        add_atom("O", x + np.random.uniform(-0.4, 0.4), y + 0.9, z, "URE")
         x, y, z, direction = step(x, y, z, 1.47, direction)
         add_atom("N", x, y, z, "URE")
-
         res_id += 1
         return x, y, z, direction
 
     def generate_pc_urethane_hard(x, y, z, direction):
         """Polycarbonate-urethane hard segment for CarboSil"""
         nonlocal res_id
-        # Carbonate linkage
         x, y, z, direction = step(x, y, z, 1.43, direction)
         add_atom("O", x, y, z, "PCB")
         x, y, z, direction = step(x, y, z, 1.33, direction)
         add_atom("C", x, y, z, "PCB")
-        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "PCB")
+        add_atom("O", x + np.random.uniform(-0.4, 0.4), y + 0.9, z, "PCB")
         x, y, z, direction = step(x, y, z, 1.43, direction)
         add_atom("O", x, y, z, "PCB")
-
-        # Hexamethylene spacer
         for _ in range(3):
             x, y, z, direction = step(x, y, z, 1.54, direction)
             add_atom("C", x, y, z, "PCB")
-
-        # Urethane
         x, y, z, direction = step(x, y, z, 1.47, direction)
         add_atom("N", x, y, z, "PCB")
         x, y, z, direction = step(x, y, z, 1.33, direction)
         add_atom("C", x, y, z, "PCB")
-        add_atom("O", x + np.random.uniform(-0.5, 0.5), y + 1.2, z, "PCB")
-
+        add_atom("O", x + np.random.uniform(-0.4, 0.4), y + 0.9, z, "PCB")
         res_id += 1
         return x, y, z, direction
 
-    # Generate chains
+    # Determine composition
     sparsa_total = sparsa_frac
     carbosil_total = carbosil_frac
     total = sparsa_total + carbosil_total
@@ -187,36 +190,43 @@ def generate_polymer_chains(membrane, sparsa_frac, carbosil_frac, num_chains=25)
         sparsa_total = 0.5
         carbosil_total = 0.5
 
-    for _ in range(num_chains):
-        # Random start position
-        x = np.random.uniform(-box_size/2, box_size/2)
-        y = np.random.uniform(-box_size/2, box_size/2)
-        z = np.random.uniform(-box_size/2, box_size/2)
-        direction = random_direction()
+    # Generate chains starting from a grid to fill the box evenly
+    # Use more chains for denser packing
+    n_chains = 60
+    grid_nx, grid_ny, grid_nz = 5, 5, 3  # Start points grid
 
-        # Determine chain type
-        is_carbosil = np.random.random() < (carbosil_total / total)
+    chain_count = 0
+    for gx in range(grid_nx):
+        for gy in range(grid_ny):
+            for gz in range(grid_nz):
+                if chain_count >= n_chains:
+                    break
 
-        # Generate 2-4 soft-hard repeat units per chain
-        for _ in range(np.random.randint(2, 4)):
-            if is_carbosil:
-                # CarboSil: PDMS soft + PC-urethane hard
-                x, y, z, direction = generate_pdms_segment(x, y, z, direction, n_units=np.random.randint(4, 7))
-                x, y, z, direction = generate_pc_urethane_hard(x, y, z, direction)
-            else:
-                # Sparsa: PEG soft + urethane hard
-                if np.random.random() < 0.7:
-                    x, y, z, direction = generate_peg_segment(x, y, z, direction, n_units=np.random.randint(5, 8))
-                else:
-                    x, y, z, direction = generate_pcl_segment(x, y, z, direction, n_units=np.random.randint(3, 5))
-                x, y, z, direction = generate_urethane_hard(x, y, z, direction)
+                # Start position on grid with jitter
+                x = -box_x/2 + (gx + 0.5) * box_x/grid_nx + np.random.uniform(-2, 2)
+                y = -box_y/2 + (gy + 0.5) * box_y/grid_ny + np.random.uniform(-2, 2)
+                z = -box_z/2 + (gz + 0.5) * box_z/grid_nz + np.random.uniform(-1, 1)
 
-            # Wrap around if outside box
-            if abs(x) > box_size/2 or abs(y) > box_size/2 or abs(z) > box_size/2:
-                x = np.random.uniform(-box_size/2, box_size/2)
-                y = np.random.uniform(-box_size/2, box_size/2)
-                z = np.random.uniform(-box_size/2, box_size/2)
                 direction = random_direction()
+                is_carbosil = np.random.random() < (carbosil_total / total)
+
+                # Generate 3-5 repeat units per chain
+                for _ in range(np.random.randint(3, 6)):
+                    if is_carbosil:
+                        x, y, z, direction = generate_pdms_segment(x, y, z, direction, n_units=np.random.randint(4, 7))
+                        x, y, z, direction = generate_pc_urethane_hard(x, y, z, direction)
+                    else:
+                        if np.random.random() < 0.7:
+                            x, y, z, direction = generate_peg_segment(x, y, z, direction, n_units=np.random.randint(5, 8))
+                        else:
+                            x, y, z, direction = generate_pcl_segment(x, y, z, direction, n_units=np.random.randint(3, 5))
+                        x, y, z, direction = generate_urethane_hard(x, y, z, direction)
+
+                    # Occasionally change direction for more tangling
+                    if np.random.random() < 0.3:
+                        direction = random_direction()
+
+                chain_count += 1
 
     return atoms
 
@@ -328,6 +338,9 @@ def render_3dmol_allatom(atoms, carbosil_frac, molecule_info=None, animate=False
             }});
             """
 
+    # Box dimensions for bounding box
+    box_x, box_y, box_z = 40, 40, 15
+
     html = f"""
     <script src="https://3dmol.org/build/3Dmol-min.js"></script>
     <div id="viewer" style="width: 100%; height: 500px; position: relative;"></div>
@@ -338,11 +351,29 @@ def render_3dmol_allatom(atoms, carbosil_frac, molecule_info=None, animate=False
 
         {color_scheme}
 
+        // Draw membrane bounding box
+        var hx = {box_x}/2, hy = {box_y}/2, hz = {box_z}/2;
+        var boxColor = 0x555555;
+        var boxWidth = 1.5;
+        viewer.addLine({{start: {{x: -hx, y: -hy, z: -hz}}, end: {{x: hx, y: -hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: -hy, z: -hz}}, end: {{x: hx, y: hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: hy, z: -hz}}, end: {{x: -hx, y: hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: hy, z: -hz}}, end: {{x: -hx, y: -hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: -hy, z: hz}}, end: {{x: hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: -hy, z: hz}}, end: {{x: hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: hy, z: hz}}, end: {{x: -hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: hy, z: hz}}, end: {{x: -hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: -hy, z: -hz}}, end: {{x: -hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: -hy, z: -hz}}, end: {{x: hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: hy, z: -hz}}, end: {{x: hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: hy, z: -hz}}, end: {{x: -hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+
         {mol_sphere_js}
 
         viewer.zoomTo();
-        viewer.zoom(0.6);  // Zoom out to show more context
-        viewer.rotate(15, {{x: 1, y: 0, z: 0}});
+        viewer.zoom(0.5);
+        viewer.rotate(20, {{x: 1, y: 0, z: 0}});
+        viewer.rotate(-15, {{x: 0, y: 1, z: 0}});
         viewer.render();
 
         {animation_js}
@@ -477,6 +508,9 @@ def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None,
             }});
             """
 
+    # Box dimensions for bounding box (must match generate_polymer_chains)
+    box_x, box_y, box_z = 40, 40, 15
+
     html = f"""
     <script src="https://3dmol.org/build/3Dmol-min.js"></script>
     <div id="viewer" style="width: 100%; height: 500px; position: relative;"></div>
@@ -487,11 +521,38 @@ def render_3dmol_allatom_styled(atoms, carbosil_frac, style, molecule_info=None,
 
         {color_scheme}
 
+        // Draw membrane bounding box (wireframe)
+        var boxX = {box_x};
+        var boxY = {box_y};
+        var boxZ = {box_z};
+        var hx = boxX/2, hy = boxY/2, hz = boxZ/2;
+        var boxColor = 0x555555;
+        var boxWidth = 1.5;
+
+        // Bottom face edges
+        viewer.addLine({{start: {{x: -hx, y: -hy, z: -hz}}, end: {{x: hx, y: -hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: -hy, z: -hz}}, end: {{x: hx, y: hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: hy, z: -hz}}, end: {{x: -hx, y: hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: hy, z: -hz}}, end: {{x: -hx, y: -hy, z: -hz}}, color: boxColor, linewidth: boxWidth}});
+
+        // Top face edges
+        viewer.addLine({{start: {{x: -hx, y: -hy, z: hz}}, end: {{x: hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: -hy, z: hz}}, end: {{x: hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: hy, z: hz}}, end: {{x: -hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: hy, z: hz}}, end: {{x: -hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+
+        // Vertical edges connecting top and bottom
+        viewer.addLine({{start: {{x: -hx, y: -hy, z: -hz}}, end: {{x: -hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: -hy, z: -hz}}, end: {{x: hx, y: -hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: hx, y: hy, z: -hz}}, end: {{x: hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+        viewer.addLine({{start: {{x: -hx, y: hy, z: -hz}}, end: {{x: -hx, y: hy, z: hz}}, color: boxColor, linewidth: boxWidth}});
+
         {mol_sphere_js}
 
         viewer.zoomTo();
-        viewer.zoom(0.6);  // Zoom out to show more context
-        viewer.rotate(15, {{x: 1, y: 0, z: 0}});
+        viewer.zoom(0.5);  // Zoom out to show full membrane box
+        viewer.rotate(20, {{x: 1, y: 0, z: 0}});
+        viewer.rotate(-15, {{x: 0, y: 1, z: 0}});
         viewer.render();
 
         {animation_js}
