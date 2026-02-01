@@ -29,20 +29,25 @@ def generate_pdb_from_structure(membrane, carbosil_frac):
     atoms = []
 
     nx, ny, nz = structure.shape
-    scale = 1.5  # Angstrom-like scaling
+    scale = 2.0  # Angstrom-like scaling
 
     # Generate atoms representing the polymer structure
     atom_id = 1
     res_id = 1
 
-    # Sample with finer resolution for all-atom look
-    step = 1
+    # Sample with coarser resolution for performance (step=3 reduces atoms by ~27x)
+    step = 3
+
+    # Limit total atoms for browser performance
+    max_atoms = 2000
 
     for i in range(0, nx, step):
         for j in range(0, ny, step):
             for k in range(0, nz, step):
+                if atom_id > max_atoms:
+                    break
                 val = structure[i, j, k]
-                if val > 0.05:  # Include more atoms
+                if val > 0.1:  # Higher threshold to reduce atoms
                     x = (i - nx/2) * scale
                     y = (j - ny/2) * scale
                     z = (k - nz/2) * scale
@@ -104,6 +109,10 @@ def generate_pdb_from_structure(membrane, carbosil_frac):
 
                     if atom_id % 50 == 0:
                         res_id += 1
+            if atom_id > max_atoms:
+                break
+        if atom_id > max_atoms:
+            break
 
     return atoms
 
